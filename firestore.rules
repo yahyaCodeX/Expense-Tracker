@@ -1,0 +1,57 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidDate(dateStr) {
+      return dateStr is string && dateStr.size() == 10 && dateStr.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isValidExpense(data) {
+      return data.keys().hasAll(['date', 'breakfast', 'lunch', 'dinner', 'dailyTotal']) &&
+             data.date is string &&
+             data.breakfast is number && data.breakfast >= 0 && data.breakfast <= 50000 &&
+             data.lunch is number && data.lunch >= 0 && data.lunch <= 50000 &&
+             data.dinner is number && data.dinner >= 0 && data.dinner <= 50000 &&
+             data.dailyTotal is number && data.dailyTotal >= 0 && data.dailyTotal <= 150000;
+    }
+
+    // User document
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      // User's daily meal expenses subcollection
+      match /expenses/{date} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidDate(date) && isValidExpense(request.resource.data);
+        allow delete: if isOwner(userId);
+      }
+
+      // User's multiple mess ledgers
+      match /messes/{messId} {
+        allow read, write: if isOwner(userId);
+
+        // Daily meal expenses inside a specific mess
+        match /expenses/{date} {
+          allow read: if isOwner(userId);
+          allow create, update: if isOwner(userId) && isValidDate(date) && isValidExpense(request.resource.data);
+          allow delete: if isOwner(userId);
+        }
+      }
+    }
+  }
+}

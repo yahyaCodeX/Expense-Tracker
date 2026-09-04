@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "Expense": {
+      "title": "Expense",
+      "description": "Daily mess expense record for breakfast, lunch, and dinner",
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "Date in YYYY-MM-DD format"
+        },
+        "breakfast": {
+          "type": "number",
+          "description": "Breakfast expense in Rs"
+        },
+        "lunch": {
+          "type": "number",
+          "description": "Lunch expense in Rs"
+        },
+        "dinner": {
+          "type": "number",
+          "description": "Dinner expense in Rs"
+        },
+        "dailyTotal": {
+          "type": "number",
+          "description": "Sum of breakfast, lunch, and dinner"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Update timestamp"
+        }
+      },
+      "required": ["date", "breakfast", "lunch", "dinner", "dailyTotal"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User basic profile",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "MessLedger": {
+      "title": "MessLedger",
+      "description": "A mess or ledger entity where user eats meals and tracks expenses",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "monthlyBudget": { "type": "number" },
+        "icon": { "type": "string" },
+        "color": { "type": "string" },
+        "isDefault": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["name", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/expenses/{date}": {
+      "schema": "Expense",
+      "description": "Legacy/default daily meal records keyed by date string (YYYY-MM-DD)"
+    },
+    "/users/{userId}/messes/{messId}": {
+      "schema": "MessLedger",
+      "description": "User mess ledgers"
+    },
+    "/users/{userId}/messes/{messId}/expenses/{date}": {
+      "schema": "Expense",
+      "description": "Daily meal records in a specific mess ledger"
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User root document"
+    }
+  }
+}

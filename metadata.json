@@ -1,0 +1,6 @@
+{
+  "name": "MessMate",
+  "description": "A lightweight, mobile-friendly web app for tracking daily university mess expenses across multiple mess ledgers with monthly calculations, reports, and Firebase persistence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
