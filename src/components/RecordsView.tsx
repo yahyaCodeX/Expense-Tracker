@@ -33,7 +33,7 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
   selectedMonth,
   setSelectedMonth,
   monthSummary,
-  allRecords,
+  allRecords = [],
   onEditRecord,
   onDeleteRecord,
   activeMessName,
@@ -42,14 +42,15 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
   const [deleteConfirmDate, setDeleteConfirmDate] = useState<string | null>(null);
 
   // Filter records by selected month and search term
-  const monthlyRecords = allRecords.filter((r) => r.date.startsWith(selectedMonth));
+  const safeRecords = Array.isArray(allRecords) ? allRecords : [];
+  const monthlyRecords = safeRecords.filter((r) => r && r.date && r.date.startsWith(selectedMonth));
   const filteredRecords = monthlyRecords.filter((r) => {
     if (!searchTerm) return true;
     return r.date.includes(searchTerm);
   });
 
   const handleExportCSV = () => {
-    exportMonthlyRecordsToCSV(allRecords, selectedMonth);
+    exportMonthlyRecordsToCSV(safeRecords, selectedMonth);
   };
 
   const handleConfirmDelete = () => {

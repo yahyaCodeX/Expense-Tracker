@@ -22,13 +22,14 @@ import {
   Firestore,
   Unsubscribe
 } from 'firebase/firestore';
-import { ExpenseRecord, FirebaseConfigOptions, UserProfile, MessLedger } from '../types';
+import { ExpenseRecord, FirebaseConfigOptions, UserProfile, MessLedger, DailyExpenseItem } from '../types';
 import defaultRawConfig from '../../firebase-config.js';
 
 const STORAGE_KEY_CUSTOM_CONFIG = 'messmate_custom_firebase_config';
 const STORAGE_KEY_LOCAL_USER = 'messmate_local_user';
 const STORAGE_KEY_LOCAL_DATA = 'messmate_local_expenses';
 const STORAGE_KEY_LOCAL_MESSES = 'messmate_local_messes';
+const STORAGE_KEY_DAILY_EXPENSES = 'messmate_local_daily_expenses';
 
 export enum OperationType {
   CREATE = 'create',
@@ -564,37 +565,42 @@ export async function saveMealExpense(
     updatedAt: nowIso,
   };
 
-  const { isConfigured, db } = getFirebaseServices();
-  if (isConfigured && db) {
-    const path = `users/${userId}/messes/${messId}/expenses/${date}`;
-    try {
-      const expenseRef = doc(db, 'users', userId, 'messes', messId, 'expenses', date);
-      await setDoc(expenseRef, record, { merge: true });
-
-      // If default mess, also write to legacy collection so old and new structures stay synced
-      if (messId === 'default') {
-        const legacyRef = doc(db, 'users', userId, 'expenses', date);
-        await setDoc(legacyRef, record, { merge: true });
-      }
-
-      return record;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path, currentUser);
-    }
-  }
-
-  // Local mode persistence
+  // 1. Save locally FIRST immediately for instant UI feedback and guaranteed data persistence
   const records = getLocalMessExpenses(userId, messId);
-  records[date] = {
+  const savedRecord: ExpenseRecord = {
     ...record,
     createdAt: records[date]?.createdAt || nowIso,
     updatedAt: nowIso,
   };
+  records[date] = savedRecord;
   saveLocalMessExpenses(userId, messId, records);
 
-  // Dispatch custom storage event for instant UI update
-  window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId } }));
-  return records[date];
+  // Dispatch custom storage event for instant UI updates across components
+  window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId, record: savedRecord } }));
+
+  // 2. Sync to Firestore in the background with timeout protection
+  const { isConfigured, db } = getFirebaseServices();
+  if (isConfigured && db) {
+    try {
+      const expenseRef = doc(db, 'users', userId, 'messes', messId, 'expenses', date);
+      const writePromise = setDoc(expenseRef, savedRecord, { merge: true });
+
+      if (messId === 'default') {
+        const legacyRef = doc(db, 'users', userId, 'expenses', date);
+        setDoc(legacyRef, savedRecord, { merge: true }).catch(() => {});
+      }
+
+      // Allow up to 3.5 seconds for network sync, but do not hang indefinitely
+      await Promise.race([
+        writePromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore sync timeout')), 3500))
+      ]);
+    } catch (err) {
+      console.warn('Firestore sync notice (record safely saved locally):', err);
+    }
+  }
+
+  return savedRecord;
 }
 
 export async function deleteMealExpense(
@@ -603,9 +609,17 @@ export async function deleteMealExpense(
   currentUser: UserProfile | null,
   messId: string = 'default'
 ): Promise<void> {
+  // 1. Delete locally FIRST
+  const records = getLocalMessExpenses(userId, messId);
+  if (records[date]) {
+    delete records[date];
+    saveLocalMessExpenses(userId, messId, records);
+    window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId } }));
+  }
+
+  // 2. Sync deletion to Firestore
   const { isConfigured, db } = getFirebaseServices();
   if (isConfigured && db) {
-    const path = `users/${userId}/messes/${messId}/expenses/${date}`;
     try {
       const expenseRef = doc(db, 'users', userId, 'messes', messId, 'expenses', date);
       await deleteDoc(expenseRef);
@@ -614,18 +628,9 @@ export async function deleteMealExpense(
           await deleteDoc(doc(db, 'users', userId, 'expenses', date));
         } catch {}
       }
-      return;
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, path, currentUser);
+      console.warn('Firestore delete notice (record safely removed locally):', err);
     }
-  }
-
-  // Local mode
-  const records = getLocalMessExpenses(userId, messId);
-  if (records[date]) {
-    delete records[date];
-    saveLocalMessExpenses(userId, messId, records);
-    window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId } }));
   }
 }
 
@@ -634,9 +639,13 @@ export async function clearAllExpenses(
   currentUser: UserProfile | null,
   messId: string = 'default'
 ): Promise<void> {
+  // 1. Clear local state immediately
+  saveLocalMessExpenses(userId, messId, {});
+  window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId } }));
+
+  // 2. Sync to Firestore
   const { isConfigured, db } = getFirebaseServices();
   if (isConfigured && db) {
-    const collectionPath = `users/${userId}/messes/${messId}/expenses`;
     try {
       const q = collection(db, 'users', userId, 'messes', messId, 'expenses');
       const snapshot = await getDocs(q);
@@ -648,15 +657,10 @@ export async function clearAllExpenses(
         const legacySnap = await getDocs(legacyQ);
         await Promise.all(legacySnap.docs.map((d) => deleteDoc(d.ref)));
       }
-      return;
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, collectionPath, currentUser);
+      console.warn('Firestore clear notice (cleared locally):', err);
     }
   }
-
-  // Local mode
-  saveLocalMessExpenses(userId, messId, {});
-  window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId } }));
 }
 
 export function subscribeUserExpenses(
@@ -665,79 +669,17 @@ export function subscribeUserExpenses(
   currentUser: UserProfile | null,
   messId: string = 'default'
 ): Unsubscribe {
-  const { isConfigured, db } = getFirebaseServices();
-
-  if (isConfigured && db) {
-    const collectionPath = `users/${userId}/messes/${messId}/expenses`;
-    try {
-      const q = collection(db, 'users', userId, 'messes', messId, 'expenses');
-      const unsubscribe = onSnapshot(
-        q,
-        async (snapshot) => {
-          // If default mess has no records in messes/default/expenses, check legacy collection
-          if (snapshot.empty && messId === 'default') {
-            try {
-              const legacySnap = await getDocs(collection(db, 'users', userId, 'expenses'));
-              if (!legacySnap.empty) {
-                const list: ExpenseRecord[] = [];
-                legacySnap.forEach((d) => {
-                  const data = d.data() as ExpenseRecord;
-                  list.push({
-                    date: data.date || d.id,
-                    breakfast: Number(data.breakfast) || 0,
-                    lunch: Number(data.lunch) || 0,
-                    dinner: Number(data.dinner) || 0,
-                    dailyTotal: Number(data.dailyTotal) || (Number(data.breakfast) || 0) + (Number(data.lunch) || 0) + (Number(data.dinner) || 0),
-                    messId: 'default',
-                    createdAt: data.createdAt,
-                    updatedAt: data.updatedAt,
-                  });
-                });
-                list.sort((a, b) => b.date.localeCompare(a.date));
-                onData(list);
-                return;
-              }
-            } catch {}
-          }
-
-          const list: ExpenseRecord[] = [];
-          snapshot.forEach((d) => {
-            const data = d.data() as ExpenseRecord;
-            list.push({
-              date: data.date || d.id,
-              breakfast: Number(data.breakfast) || 0,
-              lunch: Number(data.lunch) || 0,
-              dinner: Number(data.dinner) || 0,
-              dailyTotal: Number(data.dailyTotal) || (Number(data.breakfast) || 0) + (Number(data.lunch) || 0) + (Number(data.dinner) || 0),
-              messId,
-              createdAt: data.createdAt,
-              updatedAt: data.updatedAt,
-            });
-          });
-          // Sort newest records first
-          list.sort((a, b) => b.date.localeCompare(a.date));
-          onData(list);
-        },
-        (error) => {
-          handleFirestoreError(error, OperationType.LIST, collectionPath, currentUser);
-        }
-      );
-      return unsubscribe;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, collectionPath, currentUser);
-      return () => {};
-    }
-  }
-
-  // Local mode listener
+  // Helper to emit current local expenses
   const emitLocalData = () => {
     const local = getLocalMessExpenses(userId, messId);
     const list = Object.values(local).sort((a, b) => b.date.localeCompare(a.date));
     onData(list);
   };
 
+  // 1. Always emit cached local data immediately on subscription
   emitLocalData();
 
+  // 2. Listen to custom internal and storage events for instant offline updates
   const handleUpdate = (e: Event) => {
     const custom = e as CustomEvent;
     if (custom.detail?.userId === userId && (!custom.detail?.messId || custom.detail?.messId === messId)) {
@@ -748,9 +690,314 @@ export function subscribeUserExpenses(
   window.addEventListener('messmate_expenses_updated', handleUpdate);
   window.addEventListener('storage', emitLocalData);
 
+  // 3. Connect Firestore real-time listener if configured
+  const { isConfigured, db } = getFirebaseServices();
+  let firestoreUnsubscribe: Unsubscribe = () => {};
+
+  if (isConfigured && db) {
+    try {
+      const q = collection(db, 'users', userId, 'messes', messId, 'expenses');
+      firestoreUnsubscribe = onSnapshot(
+        q,
+        async (snapshot) => {
+          // If default mess has no records in messes/default/expenses, check legacy collection
+          if (snapshot.empty && messId === 'default') {
+            try {
+              const legacySnap = await getDocs(collection(db, 'users', userId, 'expenses'));
+              if (!legacySnap.empty) {
+                const list: ExpenseRecord[] = [];
+                const localMap = getLocalMessExpenses(userId, messId);
+                legacySnap.forEach((d) => {
+                  const data = d.data() as ExpenseRecord;
+                  const item: ExpenseRecord = {
+                    date: data.date || d.id,
+                    breakfast: Number(data.breakfast) || 0,
+                    lunch: Number(data.lunch) || 0,
+                    dinner: Number(data.dinner) || 0,
+                    dailyTotal: Number(data.dailyTotal) || (Number(data.breakfast) || 0) + (Number(data.lunch) || 0) + (Number(data.dinner) || 0),
+                    messId: 'default',
+                    createdAt: data.createdAt,
+                    updatedAt: data.updatedAt,
+                  };
+                  list.push(item);
+                  localMap[item.date] = item;
+                });
+                saveLocalMessExpenses(userId, messId, localMap);
+                list.sort((a, b) => b.date.localeCompare(a.date));
+                onData(list);
+                return;
+              }
+            } catch {}
+          }
+
+          if (!snapshot.empty) {
+            const list: ExpenseRecord[] = [];
+            const localMap = getLocalMessExpenses(userId, messId);
+            snapshot.forEach((d) => {
+              const data = d.data() as ExpenseRecord;
+              const item: ExpenseRecord = {
+                date: data.date || d.id,
+                breakfast: Number(data.breakfast) || 0,
+                lunch: Number(data.lunch) || 0,
+                dinner: Number(data.dinner) || 0,
+                dailyTotal: Number(data.dailyTotal) || (Number(data.breakfast) || 0) + (Number(data.lunch) || 0) + (Number(data.dinner) || 0),
+                messId,
+                createdAt: data.createdAt,
+                updatedAt: data.updatedAt,
+              };
+              list.push(item);
+              localMap[item.date] = item;
+            });
+            saveLocalMessExpenses(userId, messId, localMap);
+            list.sort((a, b) => b.date.localeCompare(a.date));
+            onData(list);
+          } else {
+            // Snapshot is empty, maintain any local items
+            emitLocalData();
+          }
+        },
+        (error) => {
+          console.warn('Firestore live listener notice (relying on local cache):', error);
+          emitLocalData();
+        }
+      );
+    } catch (err) {
+      console.warn('Failed to start Firestore listener (using local storage):', err);
+    }
+  }
+
   return () => {
     window.removeEventListener('messmate_expenses_updated', handleUpdate);
     window.removeEventListener('storage', emitLocalData);
+    if (typeof firestoreUnsubscribe === 'function') {
+      firestoreUnsubscribe();
+    }
+  };
+}
+
+// -------------------------------------------------------------
+// Daily Personal Expenses (Groceries, Travel, Academics, etc.)
+// -------------------------------------------------------------
+
+export function getLocalDailyExpenses(userId: string): Record<string, DailyExpenseItem> {
+  try {
+    const raw = localStorage.getItem(`${STORAGE_KEY_DAILY_EXPENSES}_${userId}`);
+    return raw ? JSON.parse(raw) : {};
+  } catch (err) {
+    console.error('Failed to parse local daily expenses:', err);
+    return {};
+  }
+}
+
+export function saveLocalDailyExpenses(userId: string, expenses: Record<string, DailyExpenseItem>) {
+  try {
+    localStorage.setItem(`${STORAGE_KEY_DAILY_EXPENSES}_${userId}`, JSON.stringify(expenses));
+  } catch (err) {
+    console.error('Failed to save local daily expenses:', err);
+  }
+}
+
+export async function saveDailyExpense(
+  userId: string,
+  expense: Omit<DailyExpenseItem, 'id'> & { id?: string },
+  currentUser: UserProfile | null
+): Promise<DailyExpenseItem> {
+  const nowIso = new Date().toISOString();
+  // Ensure valid non-empty string ID
+  const id = (expense.id && expense.id.trim().length > 0)
+    ? expense.id.trim()
+    : 'exp_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+
+  const localExpenses = getLocalDailyExpenses(userId);
+  const existing = localExpenses[id];
+
+  // Clean data: Ensure NO undefined properties exist
+  const recordToSave: DailyExpenseItem = {
+    id,
+    title: expense.title && expense.title.trim().length > 0 ? expense.title.trim() : 'Daily Expense',
+    amount: Math.max(0, Number(expense.amount) || 0),
+    category: expense.category || 'other',
+    date: expense.date && expense.date.trim().length > 0 ? expense.date.trim() : new Date().toISOString().slice(0, 10),
+    paymentMethod: expense.paymentMethod || 'Cash',
+    notes: expense.notes ? expense.notes.trim() : '',
+    createdAt: existing?.createdAt || nowIso,
+    updatedAt: nowIso,
+  };
+
+  // 1. Save locally first for instant UI response and offline support
+  localExpenses[id] = recordToSave;
+  saveLocalDailyExpenses(userId, localExpenses);
+
+  // Dispatch custom storage event for instant UI update
+  window.dispatchEvent(
+    new CustomEvent('messmate_daily_expenses_updated', {
+      detail: { userId, item: recordToSave }
+    })
+  );
+
+  // 2. Background Firestore sync (clean payload with zero undefined properties)
+  const { isConfigured, db } = getFirebaseServices();
+  if (isConfigured && db) {
+    try {
+      const docRef = doc(db, 'users', userId, 'daily_expenses', id);
+      const firestorePayload: Record<string, any> = {
+        id: recordToSave.id,
+        title: recordToSave.title,
+        amount: recordToSave.amount,
+        category: recordToSave.category,
+        date: recordToSave.date,
+        paymentMethod: recordToSave.paymentMethod,
+        notes: recordToSave.notes || '',
+        createdAt: recordToSave.createdAt,
+        updatedAt: recordToSave.updatedAt,
+      };
+
+      const writePromise = setDoc(docRef, firestorePayload, { merge: true });
+
+      await Promise.race([
+        writePromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore sync timeout')), 3500))
+      ]);
+    } catch (err) {
+      console.warn('Firestore daily expense sync notice (saved locally):', err);
+    }
+  }
+
+  return recordToSave;
+}
+
+export async function deleteDailyExpense(
+  userId: string,
+  expenseId: string,
+  currentUser: UserProfile | null
+): Promise<void> {
+  // 1. Delete locally first
+  const localExpenses = getLocalDailyExpenses(userId);
+  if (localExpenses[expenseId]) {
+    delete localExpenses[expenseId];
+    saveLocalDailyExpenses(userId, localExpenses);
+    window.dispatchEvent(
+      new CustomEvent('messmate_daily_expenses_updated', {
+        detail: { userId, deletedId: expenseId }
+      })
+    );
+  }
+
+  // 2. Sync deletion to Firestore
+  const { isConfigured, db } = getFirebaseServices();
+  if (isConfigured && db) {
+    try {
+      const docRef = doc(db, 'users', userId, 'daily_expenses', expenseId);
+      await deleteDoc(docRef);
+    } catch (err) {
+      console.warn('Firestore daily expense delete notice (removed locally):', err);
+    }
+  }
+}
+
+export async function clearAllDailyExpenses(
+  userId: string,
+  currentUser: UserProfile | null
+): Promise<void> {
+  // 1. Clear locally
+  saveLocalDailyExpenses(userId, {});
+  window.dispatchEvent(
+    new CustomEvent('messmate_daily_expenses_updated', {
+      detail: { userId, cleared: true }
+    })
+  );
+
+  // 2. Clear Firestore collection
+  const { isConfigured, db } = getFirebaseServices();
+  if (isConfigured && db) {
+    try {
+      const q = collection(db, 'users', userId, 'daily_expenses');
+      const snapshot = await getDocs(q);
+      await Promise.all(snapshot.docs.map((d) => deleteDoc(d.ref)));
+    } catch (err) {
+      console.warn('Firestore clear daily expenses notice:', err);
+    }
+  }
+}
+
+export function subscribeDailyExpenses(
+  userId: string,
+  onData: (items: DailyExpenseItem[]) => void,
+  currentUser: UserProfile | null
+): Unsubscribe {
+  // Helper to emit current local expenses sorted by date descending
+  const emitLocalData = () => {
+    const local = getLocalDailyExpenses(userId);
+    const list = Object.values(local).sort((a, b) => b.date.localeCompare(a.date));
+    onData(list);
+  };
+
+  // 1. Emit local immediately
+  emitLocalData();
+
+  // 2. Listen to custom internal events
+  const handleUpdate = (e: Event) => {
+    const custom = e as CustomEvent;
+    if (custom.detail?.userId === userId) {
+      emitLocalData();
+    }
+  };
+
+  window.addEventListener('messmate_daily_expenses_updated', handleUpdate);
+  window.addEventListener('storage', emitLocalData);
+
+  // 3. Connect Firestore listener if configured
+  const { isConfigured, db } = getFirebaseServices();
+  let firestoreUnsubscribe: Unsubscribe = () => {};
+
+  if (isConfigured && db) {
+    try {
+      const q = collection(db, 'users', userId, 'daily_expenses');
+      firestoreUnsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          if (!snapshot.empty) {
+            const list: DailyExpenseItem[] = [];
+            const localMap = getLocalDailyExpenses(userId);
+            snapshot.forEach((d) => {
+              const data = d.data() as DailyExpenseItem;
+              const item: DailyExpenseItem = {
+                id: d.id,
+                date: data.date || '',
+                title: data.title || '',
+                amount: Number(data.amount) || 0,
+                category: data.category || 'other',
+                paymentMethod: data.paymentMethod || 'Cash',
+                notes: data.notes || '',
+                createdAt: data.createdAt,
+                updatedAt: data.updatedAt,
+              };
+              list.push(item);
+              localMap[item.id] = item;
+            });
+            saveLocalDailyExpenses(userId, localMap);
+            list.sort((a, b) => b.date.localeCompare(a.date));
+            onData(list);
+          } else {
+            emitLocalData();
+          }
+        },
+        (error) => {
+          console.warn('Firestore daily expenses listener notice:', error);
+          emitLocalData();
+        }
+      );
+    } catch (err) {
+      console.warn('Failed to start Firestore daily expenses listener:', err);
+    }
+  }
+
+  return () => {
+    window.removeEventListener('messmate_daily_expenses_updated', handleUpdate);
+    window.removeEventListener('storage', emitLocalData);
+    if (typeof firestoreUnsubscribe === 'function') {
+      firestoreUnsubscribe();
+    }
   };
 }
 
@@ -767,4 +1014,109 @@ export function clearCustomFirebaseConfig() {
   firebaseAppInstance = null;
   firebaseAuthInstance = null;
   firestoreInstance = null;
+}
+
+// ==================== MONTHLY POCKET MONEY PERSISTENCE ====================
+export const STORAGE_KEY_POCKET_MONEY_PREFIX = 'pocket_money_tracker_pocket_';
+
+export function getLocalPocketMoney(userId: string): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(`${STORAGE_KEY_POCKET_MONEY_PREFIX}${userId}`);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.error('Failed to parse local pocket money:', err);
+  }
+  return {};
+}
+
+export function saveLocalPocketMoney(userId: string, data: Record<string, number>) {
+  try {
+    localStorage.setItem(`${STORAGE_KEY_POCKET_MONEY_PREFIX}${userId}`, JSON.stringify(data));
+  } catch (err) {
+    console.error('Failed to save local pocket money:', err);
+  }
+}
+
+export async function saveMonthlyPocketMoney(
+  userId: string,
+  yearMonth: string,
+  amount: number
+): Promise<void> {
+  const safeAmount = Math.max(0, Number(amount) || 0);
+  const localMap = getLocalPocketMoney(userId);
+  localMap[yearMonth] = safeAmount;
+  saveLocalPocketMoney(userId, localMap);
+
+  window.dispatchEvent(
+    new CustomEvent('expense_tracker_pocket_money_updated', {
+      detail: { userId, yearMonth, amount: safeAmount }
+    })
+  );
+
+  const { isConfigured, db } = getFirebaseServices();
+  if (isConfigured && db) {
+    try {
+      const docRef = doc(db, 'users', userId, 'pocket_money', yearMonth);
+      await setDoc(docRef, {
+        monthKey: yearMonth,
+        amount: safeAmount,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Could not sync pocket money to Firestore (using local storage):', err);
+    }
+  }
+}
+
+export function loadMonthlyPocketMoney(
+  userId: string,
+  onData: (data: Record<string, number>) => void
+): () => void {
+  const emitLocal = () => {
+    onData(getLocalPocketMoney(userId));
+  };
+
+  emitLocal();
+
+  const handleUpdate = () => emitLocal();
+  window.addEventListener('expense_tracker_pocket_money_updated', handleUpdate);
+  window.addEventListener('storage', emitLocal);
+
+  let unsubscribeFirestore: (() => void) | null = null;
+  const { isConfigured, db } = getFirebaseServices();
+  if (isConfigured && db) {
+    try {
+      const colRef = collection(db, 'users', userId, 'pocket_money');
+      unsubscribeFirestore = onSnapshot(colRef, (snapshot) => {
+        if (!snapshot.empty) {
+          const map = getLocalPocketMoney(userId);
+          snapshot.forEach((d) => {
+            const data = d.data();
+            if (data && typeof data.amount === 'number') {
+              map[d.id] = data.amount;
+            }
+          });
+          saveLocalPocketMoney(userId, map);
+          onData(map);
+        } else {
+          emitLocal();
+        }
+      }, (err) => {
+        console.warn('Firestore pocket money listener notice:', err);
+        emitLocal();
+      });
+    } catch (err) {
+      console.warn('Failed to start Firestore pocket money listener:', err);
+    }
+  }
+
+  return () => {
+    window.removeEventListener('expense_tracker_pocket_money_updated', handleUpdate);
+    window.removeEventListener('storage', emitLocal);
+    if (unsubscribeFirestore) {
+      unsubscribeFirestore();
+    }
+  };
 }

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  UtensilsCrossed,
+  Wallet,
   Mail,
   Lock,
   ArrowRight,
@@ -16,14 +16,13 @@ import { UserProfile } from '../types';
 
 interface AuthScreenProps {
   onSuccess: (user: UserProfile) => void;
-  isFirebaseConfigured: boolean;
+  isFirebaseConfigured?: boolean;
   isDarkMode?: boolean;
   setIsDarkMode?: (val: boolean) => void;
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   onSuccess,
-  isFirebaseConfigured,
   isDarkMode = false,
   setIsDarkMode,
 }) => {
@@ -94,13 +93,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         {/* App Logo & Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-500 text-white shadow-xl shadow-amber-500/25 mb-4">
-            <UtensilsCrossed className="w-8 h-8" />
+            <Wallet className="w-8 h-8" />
           </div>
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-            MessMate 🍽️
+            Expense Tracker 💵
           </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-            University mess expense manager for Breakfast, Lunch & Dinner
+            Manage monthly pocket money, student kharcha & daily expenses
           </p>
         </div>
 
@@ -194,7 +193,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
               ) : (
                 <>
-                  <span>{isSignUp ? 'Create Account' : 'Sign In to MessMate'}</span>
+                  <span>{isSignUp ? 'Create Account' : 'Sign In'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -209,13 +208,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         </div>
 
         {/* Footer info & Yahya Siddiqui attribution */}
-        <div className="text-center mt-6 text-xs text-slate-500 dark:text-slate-400 space-y-2">
-          <p>
-            {isFirebaseConfigured
-              ? '🟢 Firebase Authentication active'
-              : '⚡ Local storage mode active — data stays private on this device'}
-          </p>
-          <div className="pt-2 flex items-center justify-center gap-1.5 font-medium text-slate-600 dark:text-slate-400">
+        <div className="text-center mt-6 text-xs text-slate-500 dark:text-slate-400">
+          <div className="flex items-center justify-center gap-1.5 font-medium text-slate-600 dark:text-slate-400">
             <span>Created by</span>
             <span className="font-bold text-slate-800 dark:text-slate-200">Yahya Siddiqui</span>
             <span>for students with</span>

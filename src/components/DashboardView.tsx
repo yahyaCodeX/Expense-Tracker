@@ -13,10 +13,11 @@ import {
   Pencil,
   ArrowRight
 } from 'lucide-react';
-import { ExpenseRecord, MonthSummary, UserProfile, MessLedger } from '../types';
+import { ExpenseRecord, MonthSummary, UserProfile, MessLedger, DailyExpenseItem } from '../types';
 import { formatCurrency, getMonthNavigation, formatDisplayDate } from '../lib/calculations';
 import { AddExpenseCard } from './AddExpenseCard';
 import { MessSelector } from './MessSelector';
+import { PocketMoneyCard } from './PocketMoneyCard';
 
 interface DashboardViewProps {
   user: UserProfile;
@@ -24,6 +25,10 @@ interface DashboardViewProps {
   setSelectedMonth: (val: string) => void;
   monthSummary: MonthSummary;
   allRecords: ExpenseRecord[];
+  dailyExpenses?: DailyExpenseItem[];
+  pocketMoney?: number;
+  onSavePocketMoney?: (amount: number) => Promise<void>;
+  onSaveDailyExpense?: (expense: Omit<DailyExpenseItem, 'id'> & { id?: string }) => Promise<any>;
   onEditRecord: (date: string) => void;
   onDeleteRecord: (date: string) => void;
   onViewAllRecords: () => void;
@@ -32,6 +37,8 @@ interface DashboardViewProps {
   messes: MessLedger[];
   activeMessId: string;
   onSelectMess: (messId: string) => void;
+  onRecordSaved?: (record: ExpenseRecord) => void;
+  onNavigateExpenses?: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -39,19 +46,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   selectedMonth,
   setSelectedMonth,
   monthSummary,
-  allRecords,
+  allRecords = [],
+  dailyExpenses = [],
+  pocketMoney = 0,
+  onSavePocketMoney,
+  onSaveDailyExpense,
   onEditRecord,
   onDeleteRecord,
   onViewAllRecords,
   editingDate,
   onClearEditing,
-  messes,
+  messes = [],
   activeMessId,
   onSelectMess,
+  onRecordSaved,
+  onNavigateExpenses,
 }) => {
   // Monthly filtered records
-  const monthlyRecords = allRecords.filter((r) => r.date.startsWith(selectedMonth));
-  const activeMess = messes.find((m) => m.id === activeMessId) || messes[0];
+  const safeRecords = Array.isArray(allRecords) ? allRecords : [];
+  const safeMesses = Array.isArray(messes) ? messes : [];
+  const monthlyRecords = safeRecords.filter((r) => r && r.date && r.date.startsWith(selectedMonth));
+  const activeMess = safeMesses.find((m) => m.id === activeMessId) || safeMesses[0] || { id: 'default', name: 'Main Mess', icon: '🍲', createdAt: '' };
+
+  // Calculate other daily personal expenses for selected month
+  const safeDaily = Array.isArray(dailyExpenses) ? dailyExpenses : [];
+  const monthDailyExpenses = safeDaily.filter((e) => e && e.date && e.date.startsWith(selectedMonth));
+  const otherExpensesTotal = monthDailyExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const grandTotalSpent = monthSummary.totalBill + otherExpensesTotal;
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -113,30 +134,85 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
+      {/* Monthly Pocket Money & Allowance Section */}
+      {onSavePocketMoney && (
+        <PocketMoneyCard
+          selectedMonth={selectedMonth}
+          monthName={monthSummary.monthName}
+          pocketMoney={pocketMoney}
+          onSavePocketMoney={onSavePocketMoney}
+          grandTotalSpent={grandTotalSpent}
+          messTotalSpent={monthSummary.totalBill}
+          otherExpensesTotalSpent={otherExpensesTotal}
+        />
+      )}
+
       {/* 4 Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* 1. Monthly Bill */}
+        {/* 1. Grand Total Spent */}
         <div
-          id="summary-monthly-bill"
+          id="summary-grand-total"
           className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs relative overflow-hidden group hover:border-amber-500/50 transition-colors"
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              💰 Monthly Bill
+              💸 Total Spent
             </span>
             <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
               <Wallet className="w-4 h-4" />
             </div>
           </div>
           <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-            {formatCurrency(monthSummary.totalBill)}
+            {formatCurrency(grandTotalSpent)}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Total university mess cost for {monthSummary.monthName}
+            Mess food + personal daily spending
           </p>
         </div>
 
-        {/* 2. Days Recorded */}
+        {/* 2. Monthly Mess Bill */}
+        <div
+          id="summary-monthly-bill"
+          className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs relative overflow-hidden group hover:border-amber-500/50 transition-colors"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              🍲 Mess Food Bill
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 flex items-center justify-center">
+              <Utensils className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+            {formatCurrency(monthSummary.totalBill)}
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Hostel mess meals ({monthSummary.totalMeals} meals)
+          </p>
+        </div>
+
+        {/* 3. Other Personal Expenses */}
+        <div
+          id="summary-other-expenses"
+          className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs relative overflow-hidden group hover:border-emerald-500/50 transition-colors"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              🛍️ Other Expenses
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+            {formatCurrency(otherExpensesTotal)}
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            {monthDailyExpenses.length} daily personal items
+          </p>
+        </div>
+
+        {/* 4. Days Recorded */}
         <div
           id="summary-days-recorded"
           className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs relative overflow-hidden group hover:border-blue-500/50 transition-colors"
@@ -153,49 +229,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {monthSummary.daysRecorded}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Logged out of 30/31 calendar days
-          </p>
-        </div>
-
-        {/* 3. Average Per Day */}
-        <div
-          id="summary-avg-per-day"
-          className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs relative overflow-hidden group hover:border-emerald-500/50 transition-colors"
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              📊 Average Per Day
-            </span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-              <TrendingUp className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-            {monthSummary.daysRecorded > 0 ? `${formatCurrency(monthSummary.averagePerDay)}/day` : 'Rs. 0/day'}
-          </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Based on active mess days
-          </p>
-        </div>
-
-        {/* 4. Total Meals */}
-        <div
-          id="summary-total-meals"
-          className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs relative overflow-hidden group hover:border-orange-500/50 transition-colors"
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              🍽️ Total Meals
-            </span>
-            <div className="w-8 h-8 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 flex items-center justify-center">
-              <Utensils className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-            {monthSummary.totalMeals}
-          </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Meals eaten this month
+            Avg {monthSummary.daysRecorded > 0 ? formatCurrency(monthSummary.averagePerDay) : 'Rs. 0'}/day mess
           </p>
         </div>
       </div>
@@ -274,13 +308,43 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         onClearEditing={onClearEditing}
         activeMessId={activeMessId}
         activeMessName={activeMess?.name}
+        onSaveDailyExpense={onSaveDailyExpense}
         onSaved={(saved) => {
+          if (onRecordSaved) {
+            onRecordSaved(saved);
+          }
           const monthKey = saved.date.slice(0, 7);
           if (monthKey !== selectedMonth) {
             setSelectedMonth(monthKey);
           }
         }}
       />
+
+      {/* Quick link to Unified Expense Tracker */}
+      {onNavigateExpenses && (
+        <div className="bg-gradient-to-r from-amber-500/10 via-orange-500/5 to-transparent dark:from-slate-900 dark:to-slate-800/80 p-4 sm:p-5 rounded-3xl border border-amber-200/80 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Wallet className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                Daily Expenses & Monthly Budget Report
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Log groceries, rent, transport & view the combined report summing all mess bills and daily spending.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onNavigateExpenses}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-xs shrink-0 cursor-pointer self-stretch sm:self-auto justify-center"
+          >
+            <span>Track Expenses</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Main Feature 4: Monthly Records Preview List */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-6 border border-slate-200/80 dark:border-slate-800 shadow-xs">

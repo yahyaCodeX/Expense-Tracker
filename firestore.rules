@@ -52,6 +52,16 @@ service cloud.firestore {
           allow delete: if isOwner(userId);
         }
       }
+
+      // General daily personal expenses (groceries, transport, rent, etc.)
+      match /daily_expenses/{expenseId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Monthly pocket money budget documents
+      match /pocket_money/{monthKey} {
+        allow read, write: if isOwner(userId);
+      }
     }
   }
 }

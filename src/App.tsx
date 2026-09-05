@@ -5,12 +5,17 @@ import { AuthScreen } from './components/AuthScreen';
 import { DashboardView } from './components/DashboardView';
 import { RecordsView } from './components/RecordsView';
 import { ReportsView } from './components/ReportsView';
-import { SettingsView } from './components/SettingsView';
+import { ExpensesView } from './components/ExpensesView';
 import {
   subscribeAuthState,
   subscribeUserExpenses,
   subscribeUserMesses,
+  subscribeDailyExpenses,
+  saveDailyExpense,
+  deleteDailyExpense,
   deleteMealExpense,
+  saveMonthlyPocketMoney,
+  loadMonthlyPocketMoney,
   logOutUser,
   getFirebaseServices
 } from './lib/firebase';
@@ -18,14 +23,16 @@ import {
   computeMonthSummary,
   getCurrentMonthKey
 } from './lib/calculations';
-import { ExpenseRecord, UserProfile, MessLedger } from './types';
+import { ExpenseRecord, UserProfile, MessLedger, DailyExpenseItem } from './types';
 
 export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'records' | 'reports' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'expenses' | 'records' | 'reports'>('dashboard');
   const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonthKey());
   const [allRecords, setAllRecords] = useState<ExpenseRecord[]>([]);
+  const [dailyExpenses, setDailyExpenses] = useState<DailyExpenseItem[]>([]);
+  const [pocketMoneyMap, setPocketMoneyMap] = useState<Record<string, number>>({});
   const [editingDate, setEditingDate] = useState<string | null>(null);
 
   // Multi-mess (multiple ledgers) state
@@ -122,6 +129,55 @@ export default function App() {
     };
   }, [user, activeMessId]);
 
+  // Subscribe to daily personal expenses
+  useEffect(() => {
+    if (!user) {
+      setDailyExpenses([]);
+      return;
+    }
+
+    const unsub = subscribeDailyExpenses(
+      user.uid,
+      (items) => {
+        setDailyExpenses(items);
+      },
+      user
+    );
+
+    return () => {
+      if (typeof unsub === 'function') {
+        unsub();
+      }
+    };
+  }, [user]);
+
+  // Subscribe to monthly pocket money allowances
+  useEffect(() => {
+    if (!user) {
+      setPocketMoneyMap({});
+      return;
+    }
+
+    const unsub = loadMonthlyPocketMoney(user.uid, (data) => {
+      setPocketMoneyMap(data);
+    });
+
+    return () => {
+      if (typeof unsub === 'function') {
+        unsub();
+      }
+    };
+  }, [user]);
+
+  const handleSavePocketMoney = async (amount: number) => {
+    if (!user) return;
+    await saveMonthlyPocketMoney(user.uid, selectedMonth, amount);
+    setPocketMoneyMap((prev) => ({
+      ...prev,
+      [selectedMonth]: amount,
+    }));
+  };
+
   // Calculations for currently selected month
   const monthSummary = useMemo(() => {
     return computeMonthSummary(allRecords, selectedMonth);
@@ -130,6 +186,18 @@ export default function App() {
   const activeMess = messes.find((m) => m.id === activeMessId) || messes[0];
 
   const { isConfigured: isFirebaseConnected } = getFirebaseServices();
+
+  const handleRecordSaved = (saved: ExpenseRecord) => {
+    setAllRecords((prev) => {
+      const idx = prev.findIndex((r) => r.date === saved.date && (r.messId || 'default') === (saved.messId || 'default'));
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = saved;
+        return next;
+      }
+      return [saved, ...prev].sort((a, b) => b.date.localeCompare(a.date));
+    });
+  };
 
   const handleEditRecord = (date: string) => {
     setEditingDate(date);
@@ -140,13 +208,51 @@ export default function App() {
 
   const handleDeleteRecord = async (date: string) => {
     if (!user) return;
+    // Optimistically remove from state immediately
+    setAllRecords((prev) => prev.filter((r) => r.date !== date));
+    if (editingDate === date) {
+      setEditingDate(null);
+    }
     try {
       await deleteMealExpense(user.uid, date, user, activeMessId);
-      if (editingDate === date) {
-        setEditingDate(null);
-      }
     } catch (err) {
       console.error('Failed to delete expense record:', err);
+    }
+  };
+
+  const handleSaveDailyExpense = async (expense: Omit<DailyExpenseItem, 'id'> & { id?: string }) => {
+    if (!user) return;
+    try {
+      const saved = await saveDailyExpense(user.uid, expense, user);
+      setDailyExpenses((prev) => {
+        const idx = prev.findIndex((e) => e.id === saved.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = saved;
+          return next;
+        }
+        return [saved, ...prev].sort((a, b) => b.date.localeCompare(a.date));
+      });
+      // Ensure the newly added expense is visible by matching selectedMonth
+      const expMonth = saved.date.slice(0, 7);
+      if (expMonth && expMonth !== selectedMonth) {
+        setSelectedMonth(expMonth);
+      }
+      return saved;
+    } catch (err) {
+      console.error('Failed to save daily expense:', err);
+      throw err;
+    }
+  };
+
+  const handleDeleteDailyExpense = async (id: string) => {
+    if (!user) return;
+    // Optimistically remove
+    setDailyExpenses((prev) => prev.filter((e) => e.id !== id));
+    try {
+      await deleteDailyExpense(user.uid, id, user);
+    } catch (err) {
+      console.error('Failed to delete daily expense:', err);
     }
   };
 
@@ -162,7 +268,7 @@ export default function App() {
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
           <span className="text-sm font-semibold text-slate-600 dark:text-slate-400">
-            Loading MessMate...
+            Loading Expense Tracker...
           </span>
         </div>
       </div>
@@ -200,6 +306,10 @@ export default function App() {
             setSelectedMonth={setSelectedMonth}
             monthSummary={monthSummary}
             allRecords={allRecords}
+            dailyExpenses={dailyExpenses}
+            pocketMoney={pocketMoneyMap[selectedMonth] || 0}
+            onSavePocketMoney={handleSavePocketMoney}
+            onSaveDailyExpense={handleSaveDailyExpense}
             onEditRecord={handleEditRecord}
             onDeleteRecord={handleDeleteRecord}
             onViewAllRecords={() => setActiveTab('records')}
@@ -208,6 +318,23 @@ export default function App() {
             messes={messes}
             activeMessId={activeMessId}
             onSelectMess={setActiveMessId}
+            onRecordSaved={handleRecordSaved}
+            onNavigateExpenses={() => setActiveTab('expenses')}
+          />
+        )}
+
+        {activeTab === 'expenses' && (
+          <ExpensesView
+            user={user}
+            selectedMonth={selectedMonth}
+            setSelectedMonth={setSelectedMonth}
+            dailyExpenses={dailyExpenses}
+            mealRecords={allRecords}
+            allRecords={allRecords}
+            pocketMoney={pocketMoneyMap[selectedMonth] || 0}
+            onSavePocketMoney={handleSavePocketMoney}
+            onSaveExpense={handleSaveDailyExpense}
+            onDeleteExpense={handleDeleteDailyExpense}
           />
         )}
 
@@ -229,15 +356,9 @@ export default function App() {
             setSelectedMonth={setSelectedMonth}
             monthSummary={monthSummary}
             allRecords={allRecords}
-          />
-        )}
-
-        {activeTab === 'settings' && (
-          <SettingsView
-            user={user}
-            isFirebaseConnected={isFirebaseConnected}
-            allRecords={allRecords}
-            onLogout={handleLogout}
+            dailyExpenses={dailyExpenses}
+            pocketMoney={pocketMoneyMap[selectedMonth] || 0}
+            onSavePocketMoney={handleSavePocketMoney}
           />
         )}
 
@@ -250,7 +371,7 @@ export default function App() {
             <Heart className="w-4 h-4 text-rose-500 fill-rose-500 inline-block shrink-0 animate-pulse" aria-label="heart" />
           </p>
           <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-            MessMate • University Daily Food & Mess Ledger
+            Expense Tracker • Monthly Pocket Money & Student Expenses
           </p>
         </footer>
       </main>

@@ -23,11 +23,12 @@ const QUICK_SUGGESTIONS = [
 
 export const MessSelector: React.FC<MessSelectorProps> = ({
   user,
-  messes,
+  messes = [],
   activeMessId,
   onSelectMess,
   monthlyTotalBill = 0,
 }) => {
+  const safeMesses = Array.isArray(messes) ? messes : [];
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newMessName, setNewMessName] = useState('');
   const [newMessDesc, setNewMessDesc] = useState('');
@@ -50,7 +51,7 @@ export const MessSelector: React.FC<MessSelectorProps> = ({
     }
   }, [isAddModalOpen]);
 
-  const activeMess = messes.find((m) => m.id === activeMessId) || messes[0] || {
+  const activeMess = safeMesses.find((m) => m.id === activeMessId) || safeMesses[0] || {
     id: 'default',
     name: 'Main Mess',
     icon: '🍲',
@@ -118,7 +119,7 @@ export const MessSelector: React.FC<MessSelectorProps> = ({
       setDeleteConfirmMess(null);
       // If deleted active mess, switch to default or first remaining mess
       if (mess.id === activeMessId) {
-        const remaining = messes.filter((m) => m.id !== mess.id);
+        const remaining = safeMesses.filter((m) => m.id !== mess.id);
         if (remaining.length > 0) {
           onSelectMess(remaining[0].id);
         } else {
