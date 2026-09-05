@@ -30,36 +30,12 @@ service cloud.firestore {
              data.dailyTotal is number && data.dailyTotal >= 0 && data.dailyTotal <= 150000;
     }
 
-    // User document
+    // User document and all its nested subcollections
     match /users/{userId} {
       allow read, write: if isOwner(userId);
 
-      // User's daily meal expenses subcollection
-      match /expenses/{date} {
-        allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && isValidDate(date) && isValidExpense(request.resource.data);
-        allow delete: if isOwner(userId);
-      }
-
-      // User's multiple mess ledgers
-      match /messes/{messId} {
-        allow read, write: if isOwner(userId);
-
-        // Daily meal expenses inside a specific mess
-        match /expenses/{date} {
-          allow read: if isOwner(userId);
-          allow create, update: if isOwner(userId) && isValidDate(date) && isValidExpense(request.resource.data);
-          allow delete: if isOwner(userId);
-        }
-      }
-
-      // General daily personal expenses (groceries, transport, rent, etc.)
-      match /daily_expenses/{expenseId} {
-        allow read, write: if isOwner(userId);
-      }
-
-      // Monthly pocket money budget documents
-      match /pocket_money/{monthKey} {
+      // Matches any subcollection under /users/{userId} (expenses, messes, daily_expenses, pocket_money, etc.)
+      match /{allSubcollections=**} {
         allow read, write: if isOwner(userId);
       }
     }

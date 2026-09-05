@@ -17,7 +17,8 @@ import {
   saveMonthlyPocketMoney,
   loadMonthlyPocketMoney,
   logOutUser,
-  getFirebaseServices
+  getFirebaseServices,
+  syncLocalDataToCloud
 } from './lib/firebase';
 import {
   computeMonthSummary,
@@ -42,6 +43,46 @@ export default function App() {
   const [activeMessId, setActiveMessIdState] = useState<string>(() => {
     return localStorage.getItem('messmate_active_mess_id') || 'default';
   });
+
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  const handleSyncCloud = async () => {
+    if (!user) return;
+    setSyncStatus('syncing');
+    try {
+      const res = await syncLocalDataToCloud(user.uid);
+      if (res.success) {
+        setSyncStatus('synced');
+        setSyncMessage(`All expenses synced with cloud database (${res.mealCount} meal entries, ${res.dailyCount} daily items). Ready on PC & mobile!`);
+        setTimeout(() => {
+          setSyncStatus('idle');
+          setSyncMessage(null);
+        }, 6000);
+      } else {
+        setSyncStatus('error');
+        setSyncMessage(res.message);
+        setTimeout(() => {
+          setSyncStatus('idle');
+          setSyncMessage(null);
+        }, 6000);
+      }
+    } catch (err) {
+      setSyncStatus('error');
+      setSyncMessage(err instanceof Error ? err.message : 'Sync failed');
+      setTimeout(() => {
+        setSyncStatus('idle');
+        setSyncMessage(null);
+      }, 6000);
+    }
+  };
+
+  // Auto-sync data on initial login or reconnect to ensure PC & mobile stay in parity
+  useEffect(() => {
+    if (user?.uid) {
+      handleSyncCloud();
+    }
+  }, [user?.uid]);
 
   const setActiveMessId = (id: string) => {
     setActiveMessIdState(id);
@@ -296,7 +337,31 @@ export default function App() {
         isDarkMode={isDarkMode}
         setIsDarkMode={setIsDarkMode}
         isFirebaseConnected={isFirebaseConnected}
+        syncStatus={syncStatus}
+        onSyncCloud={handleSyncCloud}
       />
+
+      {syncMessage && (
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 pt-2">
+          <div
+            className={`flex items-center justify-between text-xs px-3.5 py-2.5 rounded-xl border ${
+              syncStatus === 'synced'
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                : syncStatus === 'error'
+                ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                : 'bg-sky-50 dark:bg-sky-950/40 text-sky-800 dark:text-sky-300 border-sky-200 dark:border-sky-800'
+            }`}
+          >
+            <span>{syncMessage}</span>
+            <button
+              onClick={() => setSyncMessage(null)}
+              className="ml-3 font-bold opacity-60 hover:opacity-100 transition-opacity"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-6xl mx-auto px-3 sm:px-6 pt-4 sm:pt-6">
         {activeTab === 'dashboard' && (
