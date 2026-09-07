@@ -3,7 +3,6 @@
 A modern, responsive, and cross-device expense tracker tailored for students, hostelers, and professionals to seamlessly track **daily mess/food bills**, **personal everyday expenses**, and **monthly pocket money budgets**.
 
 🌐 **Live Demo:** [https://expense-mess-tracker.netlify.app/](https://expense-mess-tracker.netlify.app/)  
-📂 **GitHub Repository:** [https://github.com/your-username/expense-mess-tracker](https://github.com/yahyaCodeX/Expense-Tracker) *(replace with your GitHub profile link)*
 
 ---
 
