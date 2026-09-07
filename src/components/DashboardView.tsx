@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -11,7 +11,11 @@ import {
   Plus,
   Trash2,
   Pencil,
-  ArrowRight
+  ArrowRight,
+  AlertTriangle,
+  Sliders,
+  ShieldAlert,
+  Sparkles
 } from 'lucide-react';
 import { ExpenseRecord, MonthSummary, UserProfile, MessLedger, DailyExpenseItem } from '../types';
 import { formatCurrency, getMonthNavigation, formatDisplayDate } from '../lib/calculations';
@@ -63,6 +67,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigateExpenses,
 }) => {
   // Monthly filtered records
+  const [recordToDelete, setRecordToDelete] = useState<string | null>(null);
+  const [forceEditBudget, setForceEditBudget] = useState(false);
   const safeRecords = Array.isArray(allRecords) ? allRecords : [];
   const safeMesses = Array.isArray(messes) ? messes : [];
   const monthlyRecords = safeRecords.filter((r) => r && r.date && r.date.startsWith(selectedMonth));
@@ -73,6 +79,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const monthDailyExpenses = safeDaily.filter((e) => e && e.date && e.date.startsWith(selectedMonth));
   const otherExpensesTotal = monthDailyExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
   const grandTotalSpent = monthSummary.totalBill + otherExpensesTotal;
+
+  // Monthly Budget Cap Calculations
+  const hasBudgetCap = (pocketMoney || 0) > 0;
+  const spentPercentage = hasBudgetCap ? Math.round((grandTotalSpent / pocketMoney!) * 100) : 0;
+  const dailySpentPercentage = hasBudgetCap ? Math.round((otherExpensesTotal / pocketMoney!) * 100) : 0;
+  
+  // Alert triggers when daily personal expenses exceed 90% OR overall expenses exceed 90% of the set budget cap
+  const isDailyOver90 = hasBudgetCap && dailySpentPercentage >= 90;
+  const isTotalOver90 = hasBudgetCap && spentPercentage >= 90;
+  const isAlertActive = isDailyOver90 || isTotalOver90;
+  const isOverBudget = hasBudgetCap && grandTotalSpent > pocketMoney!;
+  const remainingBudget = (pocketMoney || 0) - grandTotalSpent;
+
+  const handleOpenBudgetCap = () => {
+    setForceEditBudget(true);
+    const el = document.getElementById('pocket-money-budget-card');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -106,33 +132,153 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </h1>
         </div>
 
-        <div className="flex items-center gap-2 self-stretch sm:self-auto justify-between sm:justify-end">
-          <button
-            id="prev-month-btn"
-            onClick={() => setSelectedMonth(getMonthNavigation(selectedMonth, -1))}
-            title="Previous Month"
-            className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
+        <div className="flex flex-wrap items-center gap-2 self-stretch sm:self-auto justify-between sm:justify-end">
+          {/* Quick Budget Cap Indicator / Trigger */}
+          {onSavePocketMoney && (
+            <button
+              type="button"
+              id="header-budget-cap-btn"
+              onClick={handleOpenBudgetCap}
+              className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 min-h-[44px] ${
+                !hasBudgetCap
+                  ? 'border-dashed border-amber-300 dark:border-amber-700 bg-amber-50/70 hover:bg-amber-100 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300'
+                  : isAlertActive
+                  ? 'border-rose-400 dark:border-rose-700 bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 animate-pulse font-extrabold shadow-xs'
+                  : spentPercentage >= 75
+                  ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300'
+                  : 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300'
+              }`}
+            >
+              {!hasBudgetCap ? (
+                <span>+ Set Monthly Budget Cap</span>
+              ) : (
+                <span>
+                  {isAlertActive ? '🚨' : spentPercentage >= 75 ? '⚠️' : '🛡️'} Cap: {formatCurrency(pocketMoney!)} ({spentPercentage}%)
+                </span>
+              )}
+            </button>
+          )}
 
-          <input
-            type="month"
-            value={selectedMonth}
-            onChange={(e) => e.target.value && setSelectedMonth(e.target.value)}
-            className="px-3 py-2 text-xs sm:text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white cursor-pointer min-h-[44px] flex-1 sm:flex-none text-center"
-          />
+          <div className="flex items-center gap-1">
+            <button
+              id="prev-month-btn"
+              onClick={() => setSelectedMonth(getMonthNavigation(selectedMonth, -1))}
+              title="Previous Month"
+              className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
 
-          <button
-            id="next-month-btn"
-            onClick={() => setSelectedMonth(getMonthNavigation(selectedMonth, 1))}
-            title="Next Month"
-            className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => e.target.value && setSelectedMonth(e.target.value)}
+              className="px-3 py-2 text-xs sm:text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white cursor-pointer min-h-[44px] flex-1 sm:flex-none text-center"
+            />
+
+            <button
+              id="next-month-btn"
+              onClick={() => setSelectedMonth(getMonthNavigation(selectedMonth, 1))}
+              title="Next Month"
+              className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Visual Alert Banner when daily or total expenses exceed 90% of budget cap */}
+      {isAlertActive && (
+        <div
+          id="budget-cap-90-alert-banner"
+          role="alert"
+          aria-live="assertive"
+          className="p-5 sm:p-6 rounded-3xl bg-rose-50 dark:bg-rose-950/40 border-2 border-rose-500 dark:border-rose-500/90 shadow-lg shadow-rose-500/10 transition-all duration-300 animate-in fade-in slide-in-from-top-3"
+        >
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-md shadow-rose-600/30 shrink-0">
+                <AlertTriangle className="w-6 h-6 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-base sm:text-lg font-black text-rose-700 dark:text-rose-400 tracking-tight">
+                    {isOverBudget
+                      ? '🚨 Critical Alert: Monthly Budget Cap Exceeded!'
+                      : '⚠️ Visual Alert: Expenses Exceeded 90% of Budget Cap!'}
+                  </h2>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-rose-600 text-white uppercase tracking-wider animate-pulse shadow-xs">
+                    {spentPercentage}% Consumed
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 font-medium mt-1">
+                  {isOverBudget ? (
+                    <>
+                      You have spent <strong className="text-rose-700 dark:text-rose-400 font-bold">{formatCurrency(grandTotalSpent)}</strong>, exceeding your set monthly cap of{' '}
+                      <strong className="text-rose-700 dark:text-rose-400 font-bold">{formatCurrency(pocketMoney!)}</strong> by{' '}
+                      <strong className="text-rose-700 dark:text-rose-400 font-bold">{formatCurrency(grandTotalSpent - pocketMoney!)}</strong>.
+                    </>
+                  ) : (
+                    <>
+                      Expenses have reached <strong className="text-rose-700 dark:text-rose-400 font-bold">{formatCurrency(grandTotalSpent)}</strong> of your{' '}
+                      <strong className="text-rose-700 dark:text-rose-400 font-bold">{formatCurrency(pocketMoney!)}</strong> budget cap. Only{' '}
+                      <strong className="text-rose-700 dark:text-rose-400 font-bold">{formatCurrency(remainingBudget)}</strong> remains (less than 10% left).
+                    </>
+                  )}
+                  {isDailyOver90 && !isTotalOver90 && (
+                    <span className="block text-rose-600 dark:text-rose-400 font-bold mt-0.5">
+                      Personal daily expenses alone ({formatCurrency(otherExpensesTotal)}) have crossed 90% ({dailySpentPercentage}%) of your monthly cap!
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-stretch sm:self-auto justify-end">
+              <button
+                type="button"
+                id="alert-adjust-budget-btn"
+                onClick={handleOpenBudgetCap}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-bold shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap min-h-[40px] w-full sm:w-auto"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>Adjust Budget Cap</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Red Progress Bar Visual Alert */}
+          <div className="mt-4 pt-3.5 border-t border-rose-200/80 dark:border-rose-900/60 space-y-1.5">
+            <div className="flex items-center justify-between text-xs font-bold text-rose-800 dark:text-rose-300">
+              <span className="flex items-center gap-1.5">
+                <span>Budget Cap Consumption Alert Level</span>
+                <span className="text-[10px] font-black px-1.5 py-0.2 rounded-md bg-rose-600 text-white uppercase tracking-wider animate-pulse">
+                  &gt;90% Cap Warning
+                </span>
+              </span>
+              <span className="font-black">
+                {formatCurrency(grandTotalSpent)} / {formatCurrency(pocketMoney!)} ({spentPercentage}%)
+              </span>
+            </div>
+
+            {/* Red Visual Alert Progress Bar */}
+            <div className="w-full h-4 rounded-full bg-rose-200/80 dark:bg-rose-950/80 overflow-hidden p-0.5 border border-rose-300 dark:border-rose-800 shadow-inner">
+              <div
+                style={{ width: `${Math.min(100, spentPercentage)}%` }}
+                className="h-full rounded-full bg-rose-600 shadow-sm shadow-rose-600/50 transition-all duration-500 animate-pulse"
+              />
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] font-semibold text-rose-700 dark:text-rose-400">
+              <span>0%</span>
+              <span className="font-semibold text-slate-500 dark:text-slate-400">75% Safe Threshold</span>
+              <span className="font-bold text-rose-600 underline">90% Alert Trigger</span>
+              <span className="font-black text-rose-700 dark:text-rose-300">100% Cap Limit</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Monthly Pocket Money & Allowance Section */}
       {onSavePocketMoney && (
@@ -144,6 +290,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           grandTotalSpent={grandTotalSpent}
           messTotalSpent={monthSummary.totalBill}
           otherExpensesTotalSpent={otherExpensesTotal}
+          forceEdit={forceEditBudget}
+          onCloseForceEdit={() => setForceEditBudget(false)}
         />
       )}
 
@@ -152,21 +300,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         {/* 1. Grand Total Spent */}
         <div
           id="summary-grand-total"
-          className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs relative overflow-hidden group hover:border-amber-500/50 transition-colors"
+          className={`bg-white dark:bg-slate-900 p-5 rounded-3xl border shadow-xs relative overflow-hidden group transition-all ${
+            isAlertActive
+              ? 'border-rose-400/90 dark:border-rose-600 ring-2 ring-rose-500/20 shadow-md shadow-rose-500/10'
+              : 'border-slate-200/80 dark:border-slate-800 hover:border-amber-500/50'
+          }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
               💸 Total Spent
             </span>
-            <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
-              <Wallet className="w-4 h-4" />
-            </div>
+            {isAlertActive ? (
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-600 text-white uppercase tracking-wider animate-pulse">
+                &gt;90% Cap Alert
+              </span>
+            ) : (
+              <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                <Wallet className="w-4 h-4" />
+              </div>
+            )}
           </div>
-          <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+          <div
+            className={`text-2xl sm:text-3xl font-black tracking-tight ${
+              isAlertActive ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'
+            }`}
+          >
             {formatCurrency(grandTotalSpent)}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Mess food + personal daily spending
+            {hasBudgetCap ? (
+              <span className={isAlertActive ? 'text-rose-600 dark:text-rose-400 font-bold' : ''}>
+                {spentPercentage}% of {formatCurrency(pocketMoney!)} cap
+              </span>
+            ) : (
+              'Mess food + personal daily spending'
+            )}
           </p>
         </div>
 
@@ -194,21 +362,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         {/* 3. Other Personal Expenses */}
         <div
           id="summary-other-expenses"
-          className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs relative overflow-hidden group hover:border-emerald-500/50 transition-colors"
+          className={`bg-white dark:bg-slate-900 p-5 rounded-3xl border shadow-xs relative overflow-hidden group transition-all ${
+            isDailyOver90
+              ? 'border-rose-400/90 dark:border-rose-600 ring-2 ring-rose-500/20 shadow-md shadow-rose-500/10'
+              : 'border-slate-200/80 dark:border-slate-800 hover:border-emerald-500/50'
+          }`}
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
               🛍️ Other Expenses
             </span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-              <TrendingUp className="w-4 h-4" />
-            </div>
+            {isDailyOver90 ? (
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-600 text-white uppercase tracking-wider animate-pulse">
+                &gt;90% Cap
+              </span>
+            ) : (
+              <div className="w-8 h-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                <TrendingUp className="w-4 h-4" />
+              </div>
+            )}
           </div>
-          <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+          <div
+            className={`text-2xl sm:text-3xl font-black tracking-tight ${
+              isDailyOver90 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'
+            }`}
+          >
             {formatCurrency(otherExpensesTotal)}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            {monthDailyExpenses.length} daily personal items
+            {hasBudgetCap && isDailyOver90 ? (
+              <span className="text-rose-600 dark:text-rose-400 font-bold">
+                {dailySpentPercentage}% of budget cap used!
+              </span>
+            ) : (
+              `${monthDailyExpenses.length} daily personal items`
+            )}
           </p>
         </div>
 
@@ -443,8 +631,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         <span>Edit</span>
                       </button>
                       <button
-                        onClick={() => onDeleteRecord(rec.date)}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 touch-manipulation min-h-[36px]"
+                        id={`delete-record-mobile-${rec.date}`}
+                        onClick={() => setRecordToDelete(rec.date)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 touch-manipulation min-h-[36px] cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         <span>Delete</span>
@@ -524,7 +713,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                               <Pencil className="w-3.5 h-3.5" />
                             </button>
                             <button
-                              onClick={() => onDeleteRecord(rec.date)}
+                              id={`delete-record-desktop-${rec.date}`}
+                              onClick={() => setRecordToDelete(rec.date)}
                               title="Delete record"
                               className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors min-h-[36px] min-w-[36px] flex items-center justify-center cursor-pointer"
                             >
@@ -541,6 +731,45 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </>
         )}
       </div>
+
+      {/* Delete Record Confirmation Modal */}
+      {recordToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-3 text-rose-600 dark:text-rose-400 mb-3">
+              <AlertTriangle className="w-6 h-6" />
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                Delete Expense Record?
+              </h3>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mb-5">
+              Are you sure you want to delete the meal record for{' '}
+              <strong className="text-slate-900 dark:text-white">{recordToDelete}</strong>? This cannot be undone.
+            </p>
+            <div className="flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setRecordToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (recordToDelete) {
+                    onDeleteRecord(recordToDelete);
+                    setRecordToDelete(null);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 active:scale-95 text-white shadow-sm transition-all cursor-pointer"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

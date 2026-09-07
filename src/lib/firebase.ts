@@ -16,6 +16,8 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
+  deleteField,
   deleteDoc,
   collection,
   onSnapshot,
@@ -634,8 +636,16 @@ export async function deleteMealExpense(
   if (records[date]) {
     delete records[date];
     saveLocalMessExpenses(userId, messId, records);
-    window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId } }));
   }
+  // Also delete from 'default' if it exists there
+  if (messId !== 'default') {
+    const defaultRecs = getLocalMessExpenses(userId, 'default');
+    if (defaultRecs[date]) {
+      delete defaultRecs[date];
+      saveLocalMessExpenses(userId, 'default', defaultRecs);
+    }
+  }
+  window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId, deletedDate: date } }));
 
   // 2. Sync deletion to Firestore
   const { isConfigured, db } = getFirebaseServices();
@@ -643,7 +653,7 @@ export async function deleteMealExpense(
     try {
       await deleteDoc(doc(db, 'users', userId, 'expenses', date));
       if (messId !== 'default') {
-        deleteDoc(doc(db, 'users', userId, 'messes', messId, 'expenses', date)).catch(() => {});
+        await deleteDoc(doc(db, 'users', userId, 'messes', messId, 'expenses', date)).catch(() => {});
       }
     } catch (err) {
       console.warn('Firestore delete notice (record safely removed locally):', err);
@@ -658,7 +668,10 @@ export async function clearAllExpenses(
 ): Promise<void> {
   // 1. Clear local state immediately
   saveLocalMessExpenses(userId, messId, {});
-  window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId } }));
+  if (messId !== 'default') {
+    saveLocalMessExpenses(userId, 'default', {});
+  }
+  window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId, messId, cleared: true } }));
 
   // 2. Sync to Firestore
   const { isConfigured, db } = getFirebaseServices();
@@ -717,32 +730,29 @@ export function subscribeUserExpenses(
       firestoreUnsubscribe = onSnapshot(
         q,
         (snapshot) => {
-          if (!snapshot.empty) {
-            const list: ExpenseRecord[] = [];
-            const localMap = getLocalMessExpenses(userId, messId);
-            snapshot.forEach((d) => {
-              const data = d.data() as ExpenseRecord;
-              const item: ExpenseRecord = {
-                date: data.date || d.id,
-                breakfast: Number(data.breakfast) || 0,
-                lunch: Number(data.lunch) || 0,
-                dinner: Number(data.dinner) || 0,
-                dailyTotal: Number(data.dailyTotal) || (Number(data.breakfast) || 0) + (Number(data.lunch) || 0) + (Number(data.dinner) || 0),
-                messId: data.messId || 'default',
-                createdAt: data.createdAt || new Date().toISOString(),
-                updatedAt: data.updatedAt || new Date().toISOString(),
-              };
-              if (!messId || messId === 'default' || item.messId === messId) {
-                list.push(item);
-                localMap[item.date] = item;
-              }
-            });
-            saveLocalMessExpenses(userId, messId, localMap);
-            list.sort((a, b) => b.date.localeCompare(a.date));
-            onData(list);
-          } else {
-            emitLocalData();
-          }
+          // Rebuild fresh map directly from Firestore snapshot so deleted records don't persist
+          const list: ExpenseRecord[] = [];
+          const freshMap: Record<string, ExpenseRecord> = {};
+          snapshot.forEach((d) => {
+            const data = d.data() as ExpenseRecord;
+            const item: ExpenseRecord = {
+              date: data.date || d.id,
+              breakfast: Number(data.breakfast) || 0,
+              lunch: Number(data.lunch) || 0,
+              dinner: Number(data.dinner) || 0,
+              dailyTotal: Number(data.dailyTotal) || (Number(data.breakfast) || 0) + (Number(data.lunch) || 0) + (Number(data.dinner) || 0),
+              messId: data.messId || 'default',
+              createdAt: data.createdAt || new Date().toISOString(),
+              updatedAt: data.updatedAt || new Date().toISOString(),
+            };
+            if (!messId || messId === 'default' || item.messId === messId) {
+              list.push(item);
+              freshMap[item.date] = item;
+            }
+          });
+          saveLocalMessExpenses(userId, messId, freshMap);
+          list.sort((a, b) => b.date.localeCompare(a.date));
+          onData(list);
         },
         (error) => {
           console.warn('Firestore meal expenses live listener notice:', error);
@@ -875,12 +885,20 @@ export async function deleteDailyExpense(
   if (isConfigured && db) {
     try {
       const userRef = doc(db, 'users', userId);
-      setDoc(userRef, {
-        dailyExpensesMap: localExpenses,
-        lastUpdated: new Date().toISOString()
-      }, { merge: true }).catch(() => {});
+      // Remove key from dailyExpensesMap in user document using deleteField
+      try {
+        await updateDoc(userRef, {
+          [`dailyExpensesMap.${expenseId}`]: deleteField(),
+          lastUpdated: new Date().toISOString()
+        });
+      } catch {
+        await setDoc(userRef, {
+          dailyExpensesMap: localExpenses,
+          lastUpdated: new Date().toISOString()
+        }, { merge: true }).catch(() => {});
+      }
 
-      deleteDoc(doc(db, 'users', userId, 'daily_expenses', expenseId)).catch(() => {});
+      await deleteDoc(doc(db, 'users', userId, 'daily_expenses', expenseId)).catch(() => {});
     } catch (err) {
       console.warn('Firestore daily expense delete notice (removed locally):', err);
     }
@@ -904,10 +922,17 @@ export async function clearAllDailyExpenses(
   if (isConfigured && db) {
     try {
       const userRef = doc(db, 'users', userId);
-      await setDoc(userRef, {
-        dailyExpensesMap: {},
-        lastUpdated: new Date().toISOString()
-      }, { merge: true });
+      try {
+        await updateDoc(userRef, {
+          dailyExpensesMap: {},
+          lastUpdated: new Date().toISOString()
+        });
+      } catch {
+        await setDoc(userRef, {
+          dailyExpensesMap: {},
+          lastUpdated: new Date().toISOString()
+        }, { merge: true });
+      }
 
       const q = collection(db, 'users', userId, 'daily_expenses');
       const snapshot = await getDocs(q);
@@ -958,11 +983,11 @@ export function subscribeDailyExpenses(
           if (snapshot.exists()) {
             const data = snapshot.data();
             if (data?.dailyExpensesMap && typeof data.dailyExpensesMap === 'object') {
-              const localMap = getLocalDailyExpenses(userId);
+              const freshMap: Record<string, DailyExpenseItem> = {};
               const cloudMap = data.dailyExpensesMap as Record<string, DailyExpenseItem>;
               Object.entries(cloudMap).forEach(([key, val]) => {
-                if (val && typeof val === 'object') {
-                  localMap[key] = {
+                if (val && typeof val === 'object' && val.id) {
+                  freshMap[key] = {
                     id: val.id || key,
                     date: val.date || '',
                     title: val.title || 'Daily Expense',
@@ -975,8 +1000,8 @@ export function subscribeDailyExpenses(
                   };
                 }
               });
-              saveLocalDailyExpenses(userId, localMap);
-              const list = Object.values(localMap).sort((a, b) => b.date.localeCompare(a.date));
+              saveLocalDailyExpenses(userId, freshMap);
+              const list = Object.values(freshMap).sort((a, b) => b.date.localeCompare(a.date));
               onData(list);
               return;
             }
@@ -994,10 +1019,10 @@ export function subscribeDailyExpenses(
         q,
         (snapshot) => {
           if (!snapshot.empty) {
-            const localMap = getLocalDailyExpenses(userId);
+            const freshSubMap: Record<string, DailyExpenseItem> = {};
             snapshot.forEach((d) => {
               const data = d.data() as DailyExpenseItem;
-              localMap[d.id] = {
+              freshSubMap[d.id] = {
                 id: d.id,
                 date: data.date || '',
                 title: data.title || '',
@@ -1009,8 +1034,8 @@ export function subscribeDailyExpenses(
                 updatedAt: data.updatedAt,
               };
             });
-            saveLocalDailyExpenses(userId, localMap);
-            const list = Object.values(localMap).sort((a, b) => b.date.localeCompare(a.date));
+            saveLocalDailyExpenses(userId, freshSubMap);
+            const list = Object.values(freshSubMap).sort((a, b) => b.date.localeCompare(a.date));
             onData(list);
           }
         },
@@ -1225,36 +1250,45 @@ export async function syncLocalDataToCloud(userId: string): Promise<CloudSyncRes
     const localDaily = getLocalDailyExpenses(userId);
     const localPocket = getLocalPocketMoney(userId);
 
-    // Save consolidated state in users/{userId}
+    // Save consolidated state in users/{userId} (replaces dailyExpensesMap field cleanly)
     const userDocRef = doc(db, 'users', userId);
-    await setDoc(userDocRef, {
-      dailyExpensesMap: localDaily,
-      pocketMoneyMap: localPocket,
-      messes: localMesses,
-      lastSyncTime: new Date().toISOString()
-    }, { merge: true });
+    try {
+      await updateDoc(userDocRef, {
+        dailyExpensesMap: localDaily,
+        pocketMoneyMap: localPocket,
+        messes: localMesses,
+        lastSyncTime: new Date().toISOString()
+      });
+    } catch {
+      await setDoc(userDocRef, {
+        dailyExpensesMap: localDaily,
+        pocketMoneyMap: localPocket,
+        messes: localMesses,
+        lastSyncTime: new Date().toISOString()
+      }, { merge: true });
+    }
 
     // 3. Pull down any remote meal expenses from cloud to ensure local cache is fully updated
     const mealsCol = collection(db, 'users', userId, 'expenses');
     const mealsSnap = await getDocs(mealsCol);
     if (!mealsSnap.empty) {
-      const defaultRecords = getLocalMessExpenses(userId, 'default');
+      const freshMealRecords: Record<string, ExpenseRecord> = {};
       mealsSnap.forEach((d) => {
         const data = d.data() as ExpenseRecord;
         if (data && data.date) {
-          defaultRecords[data.date] = {
+          freshMealRecords[data.date] = {
             date: data.date,
             breakfast: Number(data.breakfast) || 0,
             lunch: Number(data.lunch) || 0,
             dinner: Number(data.dinner) || 0,
-            dailyTotal: Number(data.dailyTotal) || 0,
+            dailyTotal: Number(data.dailyTotal) || (Number(data.breakfast) || 0) + (Number(data.lunch) || 0) + (Number(data.dinner) || 0),
             messId: data.messId || 'default',
             createdAt: data.createdAt || new Date().toISOString(),
             updatedAt: data.updatedAt || new Date().toISOString(),
           };
         }
       });
-      saveLocalMessExpenses(userId, 'default', defaultRecords);
+      saveLocalMessExpenses(userId, 'default', freshMealRecords);
       window.dispatchEvent(new CustomEvent('messmate_expenses_updated', { detail: { userId } }));
     }
 
@@ -1263,13 +1297,11 @@ export async function syncLocalDataToCloud(userId: string): Promise<CloudSyncRes
     if (userSnap.exists()) {
       const uData = userSnap.data();
       if (uData?.dailyExpensesMap && typeof uData.dailyExpensesMap === 'object') {
-        const mergedDaily = { ...localDaily, ...uData.dailyExpensesMap };
-        saveLocalDailyExpenses(userId, mergedDaily);
+        saveLocalDailyExpenses(userId, uData.dailyExpensesMap);
         window.dispatchEvent(new CustomEvent('messmate_daily_expenses_updated', { detail: { userId } }));
       }
       if (uData?.pocketMoneyMap && typeof uData.pocketMoneyMap === 'object') {
-        const mergedPocket = { ...localPocket, ...uData.pocketMoneyMap };
-        saveLocalPocketMoney(userId, mergedPocket);
+        saveLocalPocketMoney(userId, uData.pocketMoneyMap);
         window.dispatchEvent(new CustomEvent('expense_tracker_pocket_money_updated', { detail: { userId } }));
       }
       if (Array.isArray(uData?.messes) && uData.messes.length > 0) {

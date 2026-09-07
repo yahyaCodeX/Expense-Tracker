@@ -155,6 +155,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                 <input
                   id="auth-email-input"
+                  name="email"
+                  autoComplete="email"
                   type="email"
                   required
                   placeholder="your.email@university.edu"
@@ -173,6 +175,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                 <input
                   id="auth-password-input"
+                  name="password"
+                  autoComplete={isSignUp ? "new-password" : "current-password"}
                   type="password"
                   required
                   placeholder="••••••••"
