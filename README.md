@@ -3,7 +3,7 @@
 A modern, responsive, and cross-device expense tracker tailored for students, hostelers, and professionals to seamlessly track **daily mess/food bills**, **personal everyday expenses**, and **monthly pocket money budgets**.
 
 🌐 **Live Demo:** [https://expense-mess-tracker.netlify.app/](https://expense-mess-tracker.netlify.app/)  
-📂 **GitHub Repository:** [https://github.com/your-username/expense-mess-tracker](https://github.com/your-username/expense-mess-tracker) *(replace with your GitHub profile link)*
+📂 **GitHub Repository:** [https://github.com/your-username/expense-mess-tracker](https://github.com/yahyaCodeX/Expense-Tracker) *(replace with your GitHub profile link)*
 
 ---
 
@@ -60,7 +60,7 @@ A modern, responsive, and cross-device expense tracker tailored for students, ho
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/expense-mess-tracker.git
+   git clone https://github.com/yahyaCodeX/Expense-Tracker
    cd expense-mess-tracker
    ```
 
@@ -101,7 +101,7 @@ The application includes production-ready Firestore security rules in `firestore
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/your-username/expense-mess-tracker/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/yahyaCodeX/Expense-Tracker/issues).
 
 ---
 
